@@ -39,16 +39,16 @@ int main(int argc, char *argv[]) {
   }
 
   char *pattern = argv[argc - 1];
-  int curr_line = 1;
+  int cur_line = 1;
   while (getline(&line, &line_len, stdin) != -1) {
     if (strstr(line, pattern)) {
       if (line_numbering > 0) {
-        printf("%d:%s", curr_line, line);
+        printf("%d:%s", cur_line, line);
       } else {
         printf("%s", line);
       }
     }
-    curr_line++;
+    cur_line++;
   }
 
   if (line) {

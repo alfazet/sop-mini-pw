@@ -2,6 +2,7 @@
 !*/
 !*.*
 !Makefile
+.git/*
 *.o
 *.exe
 *.out
