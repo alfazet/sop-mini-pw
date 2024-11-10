@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Wextra -fanalyzer -g -O0
+CFLAGS=-Wall -Wextra -fanalyzer -g
 L_FLAGS=-fsanitize=address,undefined
 
 TARGET=sop-venv
