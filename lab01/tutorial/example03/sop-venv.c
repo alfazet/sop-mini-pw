@@ -65,11 +65,11 @@ int read_line(int fd, char *buf, int count) {
     if (c == 0) {
       return len;
     }
+    len += c;
     if (*buf == '\n') {
       return len;
     }
     buf += c;
-    len += c;
     count -= c;
   } while (count > 0);
   return len;
@@ -156,20 +156,21 @@ void install_pkg(char *names[], char *to_install, int n) {
     }
 
     // random file
-    fd = open(pkg_name, O_WRONLY | O_CREAT, 0444);
-    if (fd < 0) {
-      ERR("open");
-    }
-    srand(time(NULL));
-    char random_chars[MAX_N];
-    for (int i = 0; i < MAX_N; i++) {
-      random_chars[i] = 'A' + (rand() % 26);
-    }
-    if (write(fd, random_chars, MAX_N) < 0) {
-      ERR("write");
-    }
-    if (close(fd)) {
-      ERR("close");
+    if (stat(pkg_name, &stat_buf)) {
+      fd = open(pkg_name, O_WRONLY | O_CREAT, 0444);
+      if (fd < 0) {
+        ERR("open");
+      }
+      char random_chars[MAX_N];
+      for (int i = 0; i < MAX_N; i++) {
+        random_chars[i] = 'A' + (rand() % 26);
+      }
+      if (write(fd, random_chars, MAX_N) < 0) {
+        ERR("write");
+      }
+      if (close(fd)) {
+        ERR("close");
+      }
     }
 
     if (chdir("..")) {
@@ -178,7 +179,73 @@ void install_pkg(char *names[], char *to_install, int n) {
   }
 }
 
-void remove_pkg(char *names[], char *to_install, int n) {}
+void remove_pkg(char *names[], char *pkg_name, int n) {
+  for (int i = 0; i < n; i++) {
+    char *env_name = names[i];
+    struct stat stat_buf;
+    if (stat(env_name, &stat_buf)) {
+      ERR("can't remove from non-existing env");
+    }
+
+    if (chdir(env_name)) {
+      ERR("chdir");
+    }
+
+    FILE *fptr = fopen("requirements", "r");
+    if (fptr == NULL) {
+      ERR("fopen");
+    }
+    stat("requirements", &stat_buf);
+    long file_sz = stat_buf.st_size;
+    char buf[MAX_N], entire_file[file_sz + 1];
+    int read, found = 0, i = 0;
+    while ((read = read_line(fileno(fptr), buf, MAX_N)) > 0) {
+      buf[read] = '\0';
+      char *where = strstr(buf, " ");
+      if (where == NULL) {
+        ERR("reading");
+      }
+      *where = '\0';
+      char *pkg_in_file = buf;
+      char *pkg_ver = where + 1; // 1 = strlen(" ")
+      if (strcmp(pkg_in_file, pkg_name)) {
+        for (int j = 0; j < strlen(pkg_in_file); j++) {
+          entire_file[i] = pkg_in_file[j];
+          i++;
+        }
+        entire_file[i] = ' ';
+        i++;
+        for (int j = 0; j < strlen(pkg_ver); j++) {
+          entire_file[i] = pkg_ver[j];
+          i++;
+        }
+      } else {
+        found = 1;
+      }
+    }
+    if (read < 0) {
+      ERR("read_line");
+    }
+    if (found == 0) {
+      ERR("tried to remove a package that isn't installed");
+    }
+    if (fclose(fptr)) {
+      ERR("fclose");
+    }
+
+    fptr = fopen("requirements", "w");
+    if (fwrite(entire_file, sizeof(char), i, fptr) < i) {
+      ERR("fwrite");
+    }
+    if (fclose(fptr)) {
+      ERR("fclose");
+    }
+
+    if (chdir("..")) {
+      ERR("chdir");
+    }
+  }
+}
 
 int main(int argc, char *argv[]) {
   int c;
@@ -219,6 +286,7 @@ int main(int argc, char *argv[]) {
     create_env(names, i);
   }
   if (to_install != NULL) {
+    srand(time(NULL));
     install_pkg(names, to_install, i);
   }
   if (to_remove != NULL) {
