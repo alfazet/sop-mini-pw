@@ -1,8 +1,8 @@
 CC=gcc
-C_FLAGS=-Wall -Wextra -fanalyzer -g
+C_FLAGS=-Wall -g
 L_FLAGS=-fsanitize=address,undefined
 
-TARGET=sop-venv
+TARGET=lab01t-5
 FILES=${TARGET}.o
 
 .PHONY: clean all

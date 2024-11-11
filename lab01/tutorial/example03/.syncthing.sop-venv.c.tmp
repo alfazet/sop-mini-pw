@@ -20,7 +20,7 @@
 #define MAX_N 256
 
 void usage(char *pname) {
-  fprintf(stderr, "%s: usage:\n", pname);
+  fprintf(stderr, "usage:\n");
   fprintf(stderr, "create new env: -c -v <ENV_NAME>\n");
   fprintf(stderr, "install package: -v <ENV_NAME> -i <PKG_NAME>==<VER>\n");
   fprintf(stderr, "remove package: -v <ENV_NAME> -r <PKG_NAME>\n");
@@ -30,6 +30,7 @@ void usage(char *pname) {
 void create_env(char *names[], int n) {
   for (int i = 0; i < n; i++) {
     char *env_name = names[i];
+    struct stat stat_buf;
     if (mkdir(env_name, 0755)) {
       if (errno == EEXIST) {
         ERR("env with this name already created");
