@@ -2,7 +2,7 @@ CC=gcc
 C_FLAGS=-Wall -Wextra -fanalyzer -g
 L_FLAGS=-fsanitize=address,undefined
 
-TARGET=sop-ed
+TARGET=sop-fork
 FILES=${TARGET}.o
 
 .PHONY: clean all
