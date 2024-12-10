@@ -1,4 +1,3 @@
-#include <bits/types/sigset_t.h>
 #define _GNU_SOURCE
 
 #include <errno.h>
@@ -48,14 +47,23 @@ ssize_t bulk_write(int fd, char *buf, size_t count) {
   return len;
 }
 
-void sig_handler(int signo) { last_signal = signo; }
-
 void sethandler(void (*f)(int), int sigNo) {
   struct sigaction act;
   memset(&act, 0, sizeof(struct sigaction));
   act.sa_handler = f;
   if (-1 == sigaction(sigNo, &act, NULL))
     ERR("sigaction");
+}
+
+void sig_handler(int signo) { last_signal = signo; }
+
+// when the parent receives a SIGINT, it should first ignore it and
+// then send it to all the children
+void sigint_handler_parent(int signo) {
+  sethandler(SIG_IGN, SIGINT);
+  if (kill(0, SIGINT) < 0) {
+    ERR("kill");
+  }
 }
 
 void sleep_exact(long ms) {
@@ -76,18 +84,26 @@ void usage(char *argv[]) {
 
 void child_work(char *chunk, int chunksz, char *filename, sigset_t oldmask) {
   int pid = getpid();
+  // don't die instantly on SIGINT and USR1,
+  // handle them later
+  sethandler(sig_handler, SIGINT);
+  sethandler(sig_handler, SIGUSR1);
   // up until this moment, SIGUSR1 was blocked in the child
-  // so that it wouldn't be handled early
-  sigprocmask(SIG_BLOCK, &oldmask, NULL);
+  // (because of the parent's mask), so that it wouldn't be handled early
+  sigset_t mask = oldmask;
+  sigprocmask(SIG_BLOCK, &mask, &oldmask);
   printf("[%d] (child) waiting for SIGUSR1 to start work\n", pid);
   // now SIGUSR1 is unblocked; if it came earlier and became pending,
   // it will be handled now, else this child will wait for it
+
+  // non-busy waiting for any signal that isn't in the mask
   while (last_signal != SIGUSR1) {
-    sigsuspend(&oldmask);
+    sigsuspend(&mask);
   }
   printf("[%d] (child) starting work, my chunk is: %s\n", pid, chunk);
 
-  int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0777);
+  int fd = TEMP_FAILURE_RETRY(
+      open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0777));
   if (fd < 0) {
     ERR("open");
   }
@@ -110,9 +126,16 @@ void child_work(char *chunk, int chunksz, char *filename, sigset_t oldmask) {
     if (write_cnt < 1) {
       ERR("bulk_write");
     }
+    // can't exit (need to return) because of malloced memory
+    if (last_signal == SIGINT) {
+      if (TEMP_FAILURE_RETRY(close(fd)) < 0) {
+        ERR("close");
+      }
+      return;
+    }
   }
 
-  if (close(fd) < 0) {
+  if (TEMP_FAILURE_RETRY(close(fd)) < 0) {
     ERR("close");
   }
 }
@@ -125,7 +148,7 @@ void create_children(char *filename, int n, sigset_t oldmask) {
   if (file_content == NULL) {
     ERR("malloc");
   }
-  int fd = open(filename, O_RDONLY);
+  int fd = TEMP_FAILURE_RETRY(open(filename, O_RDONLY));
   if (fd < 0) {
     ERR("open");
   }
@@ -133,7 +156,7 @@ void create_children(char *filename, int n, sigset_t oldmask) {
   if (read_cnt < filesz) {
     ERR("bulk_read");
   }
-  if (close(fd) < 0) {
+  if (TEMP_FAILURE_RETRY(close(fd)) < 0) {
     ERR("close");
   }
 
@@ -181,7 +204,10 @@ int main(int argc, char *argv[]) {
     usage(argv);
   }
 
-  sethandler(sig_handler, SIGUSR1);
+  sethandler(sigint_handler_parent, SIGINT);
+  // block SIGUSR1 in the parent so that it doesn't die when sending it and
+  // children start with it blocked (so that they can prepare before reacting 
+  // to it)
   sigset_t mask, oldmask;
   sigemptyset(&mask);
   sigaddset(&mask, SIGUSR1);
