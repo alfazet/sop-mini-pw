@@ -71,8 +71,11 @@ void circ_buf_push(circ_buf *cb, char *path) {
     msleep(5);
   }
   char *s = malloc((strlen(path) + 1) * sizeof(char));
+  if (s == NULL)
+    ERR("malloc");
   strcpy(s, path);
   pthread_mutex_lock(&cb->mx);
+  free(cb->buf[cb->head]);
   cb->buf[cb->head] = s;
   cb->len++;
   cb->head++;
@@ -190,13 +193,13 @@ void *thread_work(void *_args) {
     if (fd < 0)
       ERR("open");
     while (bulk_read(fd, c, 1) > 0) {
-      msleep(2);
+      msleep(2); // so that the files aren't read "instanly"
       pthread_mutex_lock(mx_quit);
       if (*quit == 1) {
         free(c);
         if (TEMP_FAILURE_RETRY(close(fd)) < 0)
           ERR("close");
-        printf("thread %u, ending\n", seed);
+        printf("thread %u ending\n", seed);
         pthread_mutex_unlock(mx_quit);
         return NULL;
       }
@@ -211,7 +214,7 @@ void *thread_work(void *_args) {
       ERR("close");
   }
   free(c);
-  printf("thread %u, ending\n", seed);
+  printf("thread %u ending\n", seed);
   return NULL;
 }
 
@@ -289,6 +292,7 @@ int main(int argc, char *argv[]) {
       ERR("pthread_create");
   }
   for (;;) {
+    msleep(100);
     pthread_mutex_lock(&mx_quit);
     if (quit == 1) {
       pthread_mutex_unlock(&mx_quit);
@@ -296,7 +300,6 @@ int main(int argc, char *argv[]) {
     }
     pthread_mutex_unlock(&mx_quit);
     kill(0, SIGUSR1);
-    msleep(100);
   }
   for (int i = 0; i < n_threads + 1; i++) {
     if (pthread_join(thread_args[i].tid, NULL))
