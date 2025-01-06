@@ -61,12 +61,27 @@ circ_buf *circ_buf_create() {
   cb->head = 0;
   cb->tail = 0;
   cb->len = 0;
-  pthread_mutex_init(&cb->mx, NULL);
+  if (pthread_mutex_init(&cb->mx, NULL)) {
+    free(cb);
+    ERR("pthread_mutex_init");
+  }
 
   return cb;
 }
 
+void circ_buf_destroy(circ_buf *cb) {
+  if (cb == NULL)
+    return;
+  pthread_mutex_destroy(&cb->mx);
+  for (int i = 0; i < CIRC_BUF_SIZE; i++) {
+    free(cb->buf[i]);
+  }
+  free(cb);
+}
+
 void circ_buf_push(circ_buf *cb, char *path) {
+  if (cb == NULL)
+    return;
   while (cb->len == CIRC_BUF_SIZE) {
     msleep(5);
   }
@@ -85,26 +100,22 @@ void circ_buf_push(circ_buf *cb, char *path) {
 }
 
 char *circ_buf_pop(circ_buf *cb) {
-  while (cb->len == 0) {
+  if (cb == NULL)
+    ERR("circ_buf is NULL");
+  for (;;) {
+    pthread_mutex_lock(&cb->mx);
+    if (cb->len > 0) {
+      char *s = cb->buf[cb->tail];
+      cb->len--;
+      cb->tail++;
+      if (cb->tail == CIRC_BUF_SIZE)
+        cb->tail = 0;
+      pthread_mutex_unlock(&cb->mx);
+      return s;
+    }
+    pthread_mutex_unlock(&cb->mx);
     msleep(5);
   }
-  pthread_mutex_lock(&cb->mx);
-  char *s = cb->buf[cb->tail];
-  cb->len--;
-  cb->tail++;
-  if (cb->tail == CIRC_BUF_SIZE)
-    cb->tail = 0;
-  pthread_mutex_unlock(&cb->mx);
-
-  return s;
-}
-
-void circ_buf_destroy(circ_buf *cb) {
-  pthread_mutex_destroy(&cb->mx);
-  for (int i = 0; i < CIRC_BUF_SIZE; i++) {
-    free(cb->buf[i]);
-  }
-  free(cb);
 }
 
 void read_args(int argc, char *argv[], int *n_threads) {
