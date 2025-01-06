@@ -196,11 +196,11 @@ void *thread_work(void *_args) {
       msleep(2); // so that the files aren't read "instanly"
       pthread_mutex_lock(mx_quit);
       if (*quit == 1) {
+        pthread_mutex_unlock(mx_quit);
         free(c);
         if (TEMP_FAILURE_RETRY(close(fd)) < 0)
           ERR("close");
         printf("thread %u ending\n", seed);
-        pthread_mutex_unlock(mx_quit);
         return NULL;
       }
       pthread_mutex_unlock(mx_quit);
