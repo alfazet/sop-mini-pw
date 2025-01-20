@@ -14,7 +14,7 @@
 #define UNUSED(x) ((void)(x))
 
 #define DECK_SIZE (4 * 13)
-#define HAND_SIZE (7)
+#define HAND_SIZE (4)
 
 typedef struct thread_args {
   pthread_t tid;
@@ -117,7 +117,6 @@ void *run_player(void *_args) {
   print_deck(hand, HAND_SIZE);
 
   for (;;) {
-    // check win condition
     int ok = 1;
     for (int i = 1; i < HAND_SIZE; i++) {
       if (hand[i] % 4 != hand[0] % 4) {
@@ -131,17 +130,33 @@ void *run_player(void *_args) {
       pthread_mutex_unlock(mtx_winner);
     }
 
-    // pass a "random" card to your neighbor
+    // pass a random card to your neighbor
     pthread_mutex_lock(mtx_card_to_take);
-    card_to_take[(id + 1) % n_players] = hand[0];
+    int to_give = rand_r(&seed) % HAND_SIZE;
+    card_to_take[(id + 1) % n_players] = hand[to_give];
     pthread_mutex_unlock(mtx_card_to_take);
 
-    pthread_barrier_wait(barrier);
-    // check if there's a winner => if yes, quit
+    int res = pthread_barrier_wait(barrier);
+    if (res == PTHREAD_BARRIER_SERIAL_THREAD) {
+      printf("turn finished, current hand of thread %d:\n", id);
+      print_deck(hand, HAND_SIZE);
+    }
+    pthread_mutex_lock(mtx_winner);
+    if (*winner != 0) {
+      if (*winner == id) {
+        printf("%d wins with hand:\n", id);
+        print_deck(hand, HAND_SIZE);
+      }
+      pthread_mutex_unlock(mtx_winner);
+      printf("thread %d exited\n", id);
+      return NULL;
+    }
+    pthread_mutex_unlock(mtx_winner);
 
     pthread_mutex_lock(mtx_card_to_take);
-    hand[0] = card_to_take[id];
+    hand[to_give] = card_to_take[id];
     pthread_mutex_unlock(mtx_card_to_take);
+    // msleep(50);
   }
 
   return NULL;
@@ -158,7 +173,6 @@ int main(int argc, char *argv[]) {
   int deck[DECK_SIZE];
   for (int i = 0; i < DECK_SIZE; i++)
     deck[i] = i;
-  shuffle(deck, DECK_SIZE);
   // print_deck(deck, DECK_SIZE);
 
   thread_args_t *thread_args = malloc(n * sizeof(thread_args_t));
@@ -185,7 +199,8 @@ int main(int argc, char *argv[]) {
   if (pthread_sigmask(SIG_BLOCK, &mask, NULL))
     ERR("pthread_sigmask");
   for (;;) {
-    int deck_ptr = 0, ready = 0, signo;
+    shuffle(deck, DECK_SIZE);
+    int deck_ptr = 0, ready = 0, winner = 0, signo;
     for (int i = 0; i < n; i++) {
       printf("waiting for another player\n");
       if (sigwait(&mask, &signo))
@@ -201,7 +216,7 @@ int main(int argc, char *argv[]) {
         thread_args[i].ready = &ready;
         thread_args[i].mtx_start = &mtx_start;
         thread_args[i].cond_start = &cond_start;
-        thread_args[i].winner = 0;
+        thread_args[i].winner = &winner;
         thread_args[i].mtx_winner = &mtx_winner;
         thread_args[i].barrier = &barrier;
         if (pthread_create(&(thread_args[i].tid), NULL, run_player,
@@ -211,8 +226,8 @@ int main(int argc, char *argv[]) {
     }
     pthread_mutex_lock(&mtx_start);
     ready = 1;
-    pthread_cond_broadcast(&cond_start); // what if there's a thread that isn't
-                                         // yet waiting on this condvar?
+    pthread_cond_broadcast(&cond_start); // what if there's a thread that
+                                         // isn't yet waiting on this condvar?
     pthread_mutex_unlock(&mtx_start);
     for (int i = 0; i < n; i++) {
       if (pthread_join(thread_args[i].tid, NULL))
@@ -222,6 +237,7 @@ int main(int argc, char *argv[]) {
 
   pthread_cond_destroy(&cond_start);
   pthread_mutex_destroy(&mtx_start);
+  pthread_barrier_destroy(&barrier);
   // free(stop);
   free(thread_args);
   exit(EXIT_SUCCESS);
