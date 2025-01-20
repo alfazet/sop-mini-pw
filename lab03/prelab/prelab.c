@@ -163,7 +163,8 @@ void walk_dir(char *path, circ_buf *cb) {
     }
     free(new_path);
   }
-  closedir(dir);
+  if (closedir(dir))
+    ERR("closedir");
 }
 
 ssize_t bulk_read(int fd, char *buf, size_t count) {
