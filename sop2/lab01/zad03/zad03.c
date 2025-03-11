@@ -15,6 +15,8 @@
 #define BUF_SZ 256
 #define STAGES 4
 
+volatile sig_atomic_t done = 0;
+
 int set_handler(void (*f)(int), int signo)
 {
     struct sigaction act;
@@ -23,6 +25,10 @@ int set_handler(void (*f)(int), int signo)
     if (sigaction(signo, &act, NULL) == -1)
         return -1;
     return 0;
+}
+
+void sigalrm_handler(int signo) {
+    done = 1;
 }
 
 void msleep(int msec)
@@ -65,20 +71,26 @@ void child_work(int id, int personal_read, int common_write)
     if (TEMP_FAILURE_RETRY(write(common_write, &msg, len)) < 0)
         ERR("write");
 
-    for (int i = 0; i < STAGES; i++)
+    int stage = 0;
+    while (stage <= 3)
     {
         int t = rand() % 401 + 100;
         msleep(t);
         int q = rand() % 20 + 1;
         int res = skill + q;
-        if (TEMP_FAILURE_RETRY(write(common_write, &id, sizeof(pid_t))) < 0)
+        if (TEMP_FAILURE_RETRY(write(common_write, &id, sizeof(int))) < 0)
             ERR("write");
         if (TEMP_FAILURE_RETRY(write(common_write, &pid, sizeof(pid_t))) < 0)
             ERR("write");
         if (TEMP_FAILURE_RETRY(write(common_write, &res, sizeof(int))) < 0)
             ERR("write");
-        // react to teacher's message
+        char is_ok;
+        if (TEMP_FAILURE_RETRY(read(personal_read, &is_ok, sizeof(char))) < 0)
+            ERR("read");
+        if (is_ok == '1')
+            stage++;
     }
+    printf("Student [%d]: I NAILED IT!\n", pid);
 
     free(msg);
     free(buf);
@@ -114,31 +126,40 @@ void parent_work(int n, int* child_pids, int* personal_writes, int common_read)
         if (TEMP_FAILURE_RETRY(read(common_read, &buf, len)) < 0)
             ERR("read");
     }
+    alarm(2);
 
     int remaining = n;
     int* stage = malloc(n * sizeof(int));
-    memset(stage, 0, n);
-    while (remaining > 0) {
+    memset(stage, 0, n * sizeof(int));
+    while (remaining > 0)
+    {
         int id = 0, pid = 0, res = 0;
-        if (TEMP_FAILURE_RETRY(read(common_read, &id, sizeof(pid_t))) < 0)
+        if (TEMP_FAILURE_RETRY(read(common_read, &id, sizeof(int))) < 0)
             ERR("read");
         if (TEMP_FAILURE_RETRY(read(common_read, &pid, sizeof(pid_t))) < 0)
             ERR("read");
         if (TEMP_FAILURE_RETRY(read(common_read, &res, sizeof(int))) < 0)
             ERR("read");
-        if (res >= POINTS[stage[id]] + rand() % 20 + 1) {
-            // send 'ok' msg to student
+        char is_ok;
+        if (res >= POINTS[stage[id]] + rand() % 20 + 1)
+        {
+            printf("Teacher: Student [%d] finished stage %d\n", pid, stage[id] + 1);
             stage[id]++;
             if (stage[id] > 3)
                 remaining--;
-        } else {
-            // send 'fail' msg to student
+            is_ok = '1';
         }
-        if (TEMP_FAILURE_RETRY(write(personal_writes[id], &msg, len)) < 0)
+        else
+        {
+            printf("Teacher: Student [%d] needs to fix stage %d\n", pid, stage[id] + 1);
+            is_ok = '0';
+        }
+        if (TEMP_FAILURE_RETRY(write(personal_writes[id], &is_ok, sizeof(char))) < 0)
             ERR("write");
     }
     printf("Teacher: IT'S FINALLY OVER!\n");
 
+    free(stage);
     free(buf);
     free(msg);
 }
@@ -188,8 +209,8 @@ int main(int argc, char** argv)
     }
     int n = atoi(argv[1]);
 
-    // if (set_handler(SIG_IGN, SIGPIPE) < 0)
-    //     ERR("set_handler");
+    if (set_handler(sigalrm_handler, SIGALRM) < 0)
+        ERR("set_handler");
 
     int* child_pids = malloc(n * sizeof(int));
     if (child_pids == NULL)
