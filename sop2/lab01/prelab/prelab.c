@@ -1,3 +1,4 @@
+#include <linux/limits.h>
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -41,13 +42,15 @@ ssize_t bulk_read_line(int fd, char* buf)
     return len;
 }
 
-void child_work(int n, int group, int id, int* read_fds, int* write_fds)
+void child_work(int n, int group, int id, int* read_fds, int* write_fds, Player* me)
 {
     int pid = getpid();
     srand(pid);
-    printf("[%d] Team %d, player %d joined\n", pid, group, id);
+    printf("[%d] Team %d, player %d joined (name: %s, hp: %d, dmg: %d)\n", pid, group + 1, id + 1, me->name, me->hp,
+           me->dmg);
     for (int i = 0; i < n; i++)
     {
+        /*
         char c = 'a' + rand() % 26;
         if (TEMP_FAILURE_RETRY(write(write_fds[i], &pid, sizeof(int))) < 0)
             ERR("write");
@@ -61,6 +64,15 @@ void child_work(int n, int group, int id, int* read_fds, int* write_fds)
         if (TEMP_FAILURE_RETRY(read(read_fds[i], &d, 1)) < 0)
             ERR("write");
         printf("[%d] received %c from [%d]\n", pid, d, other_pid);
+        */
+
+        if (TEMP_FAILURE_RETRY(write(write_fds[i], me, sizeof(Player))) < 0)
+            ERR("write");
+        printf("[%d] sent struct info\n", pid);
+        Player other;
+        if (TEMP_FAILURE_RETRY(read(read_fds[i], &other, sizeof(Player))) < 0)
+            ERR("read");
+        printf("[%d] received other player (name: %s, hp: %d, dmg: %d)\n", pid, other.name, other.hp, other.dmg); 
     }
 }
 
@@ -92,7 +104,7 @@ void create_children(int n, Player* players[2])
                 ERR("fork");
             if (pid == 0)
             {
-                child_work(n, i, j, read_fds[i][j], write_fds[i][j]);
+                child_work(n, i, j, read_fds[i][j], write_fds[i][j], &players[i][j]);
                 for (int i = 0; i < 2; i++)
                 {
                     free(players[i]);
@@ -103,9 +115,6 @@ void create_children(int n, Player* players[2])
     }
 }
 
-// "treść": dwie drużyny mające zawodników, wczytujemy początkowe dane
-// z plików tekstowych, potem drużyny się losowo biją i wygrywa pierwsza
-// drużyna, która zabije wszystkich przeciwników
 int main(int argc, char** argv)
 {
     if (argc < 2)
