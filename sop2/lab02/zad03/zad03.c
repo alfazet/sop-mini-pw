@@ -24,37 +24,6 @@ typedef struct
     char name[256];
 } child_data;
 
-// void handle_msgs(union sigval data);
-//
-// void register_notif(client_data* data)
-// {
-//     struct sigevent notif = {
-//         .sigev_value.sival_ptr = data, .sigev_notify = SIGEV_THREAD, .sigev_notify_function = handle_msgs};
-//     if (mq_notify(data->mq, &notif) == -1)
-//         ERR("mq_notify");
-// }
-
-// void handle_msgs(union sigval data)
-// {
-//     client_data* client_data = data.sival_ptr;
-//     char msg[MQ_MSG_SIZE];
-//     unsigned int priority;
-//     register_notif(client_data);
-//
-//     for (;;)
-//     {
-//         if (mq_receive(client_data->mq, msg, MQ_MSG_SIZE, &priority) != -1)
-//             printf("[%s] recieved \"%s\" with priority %d\n", client_data->name, msg, priority);
-//         else
-//         {
-//             if (errno == EAGAIN)
-//                 break;
-//             else
-//                 ERR("mq_receive");
-//         }
-//     }
-// }
-
 void msleep(int msec)
 {
     time_t sec = (int)(msec / 1000);
@@ -96,7 +65,6 @@ void child_work(char* name, int prev_pid, int p, int t1, int t2)
     for (;;)
     {
         memset(msg, 0, MAXN);
-        // add timeout here
         if (mq_receive(recv_mq, msg, MAXN, NULL) == -1)
             ERR("mq_receive");
         if (msg[0] == '!')
