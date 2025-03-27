@@ -16,6 +16,7 @@
 #define MAXN 256
 #define MAX_MSG_COUNT 10
 #define MAX_MSG_SIZE 4096
+#define N_TASKS 2
 
 typedef struct task_data
 {
@@ -69,11 +70,12 @@ void setup_notif(mqd_t *mq)
         ERR("mq_notify");
 }
 
-volatile sig_atomic_t tasks_done = 0;
+volatile sig_atomic_t results_received = 0;
 
 void mq_handler(int sig, siginfo_t *info, void *p)
 {
-    int pid = getpid();
+    (void)sig;
+    (void)p;
     mqd_t *mq = (mqd_t *)info->si_value.sival_ptr;
     setup_notif(mq);
     unsigned who;
@@ -83,7 +85,10 @@ void mq_handler(int sig, siginfo_t *info, void *p)
     {
         int res = mq_receive(*mq, (char *)&v, MAX_MSG_SIZE, &who);
         if (res != -1)
+        {
             printf("Result from worker [%d]: %.2f\n", who, v);
+            results_received++;
+        }
         else
         {
             if (errno == EAGAIN)
@@ -97,24 +102,33 @@ void mq_handler(int sig, siginfo_t *info, void *p)
 void child_work(mqd_t *server_mq, mqd_t *res_mq)
 {
     int pid = getpid();
-    unsigned int upid = (unsigned int)pid;
     srand(pid);
     printf("[%d] Worker ready!\n", pid);
     task_data data;
 
+    int tasks_done = 0;
     for (;;)
     {
-        int res = mq_receive(*server_mq, (char *)&data, MAX_MSG_SIZE, NULL);
-        if (res == -1)
-            ERR("mq_receive");
+        for (;;)
+        {
+            int res = mq_receive(*server_mq, (char *)&data, MAX_MSG_SIZE, NULL);
+            if (res == -1)
+            {
+                if (errno == EAGAIN)
+                    continue;
+                else
+                    ERR("mq_receive");
+            }
+            else
+                break;
+        }
         printf("[%d] Received task [%.2f, %.2f]\n", pid, data.v1, data.v2);
         msleep(rand() % 1500 + 500);
         double v = data.v1 + data.v2;
-        // sending pid requires a struct
         if (mq_send(*res_mq, (char *)&v, sizeof(double), 1) == -1)
             ERR("mq_send");
         tasks_done++;
-        if (tasks_done == 5)
+        if (tasks_done == N_TASKS)
             break;
     }
     printf("[%d] Worker done!\n", pid);
@@ -136,7 +150,7 @@ int main(int argc, char **argv)
         if (errno != ENOENT)
             ERR("mq_unlink");
     }
-    mqd_t server_mq = open_mq(mq_name, O_RDWR | O_CREAT);
+    mqd_t server_mq = open_mq(mq_name, O_RDWR | O_CREAT | O_NONBLOCK);
     mqd_t *queues = malloc(n * sizeof(mqd_t));
     if (queues == NULL)
         ERR("malloc");
@@ -166,12 +180,14 @@ int main(int argc, char **argv)
         setup_notif(&queues[i]);
     }
 
-    for (int i = 0; i < 5 * n; i++)
+    for (;;)
     {
         msleep(t1 + rand() % (t2 - t1));
         task_data data = {.v1 = (rand() % (100 * 100)) / 100.0, .v2 = (rand() % (100 * 100)) / 100.0};
         for (;;)
         {
+            if (results_received == n * N_TASKS)
+                break;
             int res = mq_send(server_mq, (char *)&data, sizeof(task_data), 0);
             if (res != -1)
             {
@@ -182,9 +198,11 @@ int main(int argc, char **argv)
             {
                 if (errno != EAGAIN)
                     ERR("mq_send");
-                printf("Queue is full!");
+                printf("Queue is full!\n");
             }
         }
+        if (results_received == n * N_TASKS)
+            break;
     }
     while (wait(NULL) > 0)
         ;
@@ -198,7 +216,8 @@ int main(int argc, char **argv)
     for (int i = 0; i < n; i++)
     {
         sprintf(mq_name, "/mq_res_%d", worker_pids[i]);
-        if (mq_unlink(mq_name) != 0) {
+        if (mq_unlink(mq_name) != 0)
+        {
             printf("%d\n", worker_pids[i]);
             ERR("mq_unlink");
         }
