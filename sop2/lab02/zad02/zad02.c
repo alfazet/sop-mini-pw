@@ -125,7 +125,7 @@ void child_work(mqd_t *server_mq, mqd_t *res_mq)
         printf("[%d] Received task [%.2f, %.2f]\n", pid, data.v1, data.v2);
         msleep(rand() % 1500 + 500);
         double v = data.v1 + data.v2;
-        if (mq_send(*res_mq, (char *)&v, sizeof(double), 1) == -1)
+        if (mq_send(*res_mq, (char *)&v, sizeof(double), (unsigned)pid) == -1)
             ERR("mq_send");
         tasks_done++;
         if (tasks_done == N_TASKS)

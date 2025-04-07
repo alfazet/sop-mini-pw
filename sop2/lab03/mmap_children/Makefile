@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-Wall -Wextra -g
 LDFLAGS=-fsanitize=address,undefined -fanalyzer
 
-TARGET=fifo_test
+TARGET=mmap_children
 FILES=${TARGET}.o
 
 .PHONY: clean all
