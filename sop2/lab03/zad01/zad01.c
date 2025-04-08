@@ -46,7 +46,7 @@ void child_work(int n, int id, int* res)
     msleep(1000);
     int pid = getpid();
     srand(pid);
-    if (rand() % 100 <= 20)
+    if (rand() % 100 <= 5)
         abort();
 
     int fd = open(FILENAME, O_RDONLY);
@@ -97,13 +97,13 @@ void parent_work(int n, int* res)
     {
         if (wait(NULL) <= 0)
         {
+            // if (last_signal == SIGCHLD)
+            // {
+            //     printf("Computation failed\n");
+            //     return;
+            // }
             if (errno == ECHILD)
                 break;
-            if (errno == EINTR && last_signal == SIGCHLD)
-            {
-                printf("Computation failed\n");
-                return;
-            }
             ERR("wait");
         }
     }
