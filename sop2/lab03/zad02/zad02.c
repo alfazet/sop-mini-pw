@@ -18,6 +18,25 @@
 #define NAME_LEN 32
 #define SHM_SIZE 4096
 
+typedef struct
+{
+    int running;
+    pthread_mutex_t mutex;
+    sigset_t old_mask, new_mask;
+} sigh_args_t;
+
+void* sighandling(void* args)
+{
+    sigh_args_t* sigh_args = (sigh_args_t*)args;
+    int signo;
+    if (sigwait(&sigh_args->new_mask, &signo))
+        ERR("sigwait");
+    pthread_mutex_lock(&sigh_args->mutex);
+    sigh_args->running = 0;
+    pthread_mutex_unlock(&sigh_args->mutex);
+    return NULL;
+}
+
 // Values of this function are in range (0,1]
 double func(double x)
 {
@@ -35,7 +54,6 @@ double func(double x)
  */
 int randomize_points(int N, float a, float b)
 {
-    srand(getpid());
     int hits = 0;
     for (int i = 0; i < N; ++i)
     {
@@ -57,9 +75,9 @@ int randomize_points(int N, float a, float b)
  * @param b Upper bound of integration
  * @return The approximation of integral
  */
-double summarize_calculations(uint64_t total_randomized_points, uint64_t hit_points, float a, float b)
+float summarize_calculations(uint64_t total_randomized_points, uint64_t hit_points, float a, float b)
 {
-    return (b - a) * ((double)hit_points / (double)total_randomized_points);
+    return (b - a) * ((float)hit_points / (float)total_randomized_points);
 }
 
 /**
@@ -78,9 +96,16 @@ int random_death_lock(pthread_mutex_t* mtx)
         return ret;
 
     // 2% chance to die
-    if (rand() % 50)
+    if (rand() % 100 == 0)
         abort();
+    pthread_mutex_unlock(mtx);
     return ret;
+}
+
+void process_batch(int n, float a, float b, int* total, int* total_hit)
+{
+    *total += n;
+    *total_hit += randomize_points(n, a, b);
 }
 
 void usage(char* argv[])
@@ -96,7 +121,20 @@ int main(int argc, char* argv[])
 {
     if (argc < 4)
         usage(argv);
-    int a = atoi(argv[1]), b = atoi(argv[2]), n = atoi(argv[3]);
+    int n = atoi(argv[3]);
+    float a = atof(argv[1]), b = atof(argv[2]);
+    srand(time(NULL));
+
+    sigh_args_t sigh_args = {.running = 1, .mutex = PTHREAD_MUTEX_INITIALIZER};
+    sigemptyset(&sigh_args.new_mask);
+    sigaddset(&sigh_args.new_mask, SIGINT);
+    if (pthread_sigmask(SIG_BLOCK, &sigh_args.new_mask, &sigh_args.old_mask) != 0)
+        ERR("pthread_sigmask");
+    pthread_t sigh_thread;
+    if (pthread_create(&sigh_thread, NULL, sighandling, &sigh_args) != 0)
+        ERR("pthread_create");
+    if (pthread_detach(sigh_thread) != 0)
+        ERR("pthread_detach");
 
     int shm_fd;
     char *shm_name = "shm_zad02", *sem_name = "/sem_zad02";
@@ -112,6 +150,15 @@ int main(int argc, char* argv[])
         ERR("ftruncate");
     pthread_mutex_t* mtx = (pthread_mutex_t*)shm_ptr;
     int* cnt_active = (int*)(shm_ptr + sizeof(pthread_mutex_t));
+    int* total = (int*)(cnt_active + sizeof(int));
+    int* total_hit = (int*)(total + sizeof(int));
+
+    float* saved_a = (float*)(total_hit + sizeof(int));
+    float* saved_b = (float*)(saved_a + sizeof(float));
+    if (*saved_a != 0)
+        a = *saved_a;
+    if (*saved_b != 0)
+        b = *saved_b;
     if (*cnt_active == 0)
     {
         pthread_mutexattr_t mtx_attr;
@@ -127,12 +174,42 @@ int main(int argc, char* argv[])
         ERR("sem_post");
     if (sem_close(sem) != 0)
         ERR("sem_close");
-    printf("currently active processes: %d\n", *cnt_active);
-    usleep(2000 * 1000);
+
+    for (int i = 0; i < 3; i++)
+    {
+        int err;
+        if ((err = pthread_mutex_lock(mtx)) != 0)
+        {
+            if (err == EOWNERDEAD)
+            {
+                pthread_mutex_consistent(mtx);
+                (*cnt_active)--;
+                printf("someone died\n");
+            }
+            else
+            {
+                ERR("pthread_mutex_lock");
+            }
+        }
+        process_batch(n, a, b, total, total_hit);
+        printf("Batch processed: total: %d, total_hit: %d\n", *total, *total_hit);
+        pthread_mutex_unlock(mtx);
+        random_death_lock(mtx);
+
+        pthread_mutex_lock(&sigh_args.mutex);
+        if (sigh_args.running == 0)
+        {
+            printf("SIGINT received, ending...\n");
+            pthread_mutex_unlock(&sigh_args.mutex);
+            break;
+        }
+        pthread_mutex_unlock(&sigh_args.mutex);
+    }
 
     (*cnt_active)--;
     if (*cnt_active == 0)
     {
+        printf("Last one, result: %4f, destroying...\n", summarize_calculations(*total, *total_hit, a, b));
         if (pthread_mutex_destroy(mtx) != 0)
             ERR("mutex_destroy");
         if (munmap(shm_ptr, SHM_SIZE) != 0)
@@ -144,6 +221,8 @@ int main(int argc, char* argv[])
     }
     if (munmap(shm_ptr, SHM_SIZE) != 0)
         ERR("munmap");
+    if (pthread_mutex_destroy(&sigh_args.mutex) != 0)
+        ERR("mutex_destroy");
 
     return EXIT_SUCCESS;
 }
