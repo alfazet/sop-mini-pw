@@ -194,7 +194,7 @@ int main(int argc, char* argv[])
         process_batch(n, a, b, total, total_hit);
         printf("Batch processed: total: %d, total_hit: %d\n", *total, *total_hit);
         pthread_mutex_unlock(mtx);
-        random_death_lock(mtx);
+        // random_death_lock(mtx);
 
         pthread_mutex_lock(&sigh_args.mutex);
         if (sigh_args.running == 0)

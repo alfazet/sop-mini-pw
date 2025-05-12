@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-Wall -Wextra -g
 LDFLAGS=-fsanitize=address,undefined -fanalyzer
 
-TARGET=zad02
+TARGET=dying
 FILES=${TARGET}.o
 
 .PHONY: clean all
