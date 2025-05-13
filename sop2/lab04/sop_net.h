@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -13,7 +14,6 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <arpa/inet.h>
 
 #ifndef TEMP_FAILURE_RETRY
 #define TEMP_FAILURE_RETRY(expression)             \
@@ -144,7 +144,8 @@ int add_new_client(int sfd)
         ERR("accept");
     }
     char peer_addr_readable[INET_ADDRSTRLEN];
-    printf("Connected to %s\n", inet_ntop(AF_INET, &(peer_addr.sin_addr), peer_addr_readable, INET_ADDRSTRLEN)); 
+    const char *ip_addr_str = inet_ntop(AF_INET, &(peer_addr.sin_addr), peer_addr_readable, INET_ADDRSTRLEN);
+    printf("Connected to %s:%d\n", ip_addr_str, ntohs(peer_addr.sin_port));
     return nfd;
 }
 
