@@ -75,10 +75,10 @@ int bind_local_socket(char *name, int backlog_size)
     return socketfd;
 }
 
-int make_tcp_socket(void)
+int make_socket(int type)
 {
     int sock;
-    sock = socket(PF_INET, SOCK_STREAM, 0);
+    sock = socket(PF_INET, type, 0);
     if (sock < 0)
         ERR("socket");
     return sock;
@@ -105,7 +105,7 @@ int connect_tcp_socket(char *name, char *port)
 {
     struct sockaddr_in addr;
     int socketfd;
-    socketfd = make_tcp_socket();
+    socketfd = make_socket(SOCK_STREAM);
     addr = make_address(name, port);
     if (connect(socketfd, (struct sockaddr *)&addr, sizeof(struct sockaddr_in)) < 0)
     {
@@ -114,11 +114,11 @@ int connect_tcp_socket(char *name, char *port)
     return socketfd;
 }
 
-int bind_tcp_socket(uint16_t port, int backlog_size)
+int bind_socket(uint16_t port, int type, int backlog_size)
 {
     struct sockaddr_in addr;
     int socketfd, t = 1;
-    socketfd = make_tcp_socket();
+    socketfd = make_socket(type);
     memset(&addr, 0, sizeof(struct sockaddr_in));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);

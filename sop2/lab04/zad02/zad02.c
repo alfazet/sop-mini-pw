@@ -1,11 +1,42 @@
 #include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
 #include <sys/epoll.h>
+#include <sys/socket.h>
 #include "../sop_net.h"
 
+#define N_CANDIDATES 3
 #define MAX_EVENTS 7
 #define BUF_SIZE 1024
 
-volatile sig_atomic_t do_work = 1;
+typedef struct thread_args_t
+{
+    pthread_t tid;
+    pthread_mutex_t* mtx_votes;
+    int votes[MAX_EVENTS];
+    char* udp_port;
+    pthread_mutex_t* mtx_do_work;
+    int* do_work;
+} thread_args_t;
+
+volatile sig_atomic_t do_work_glob = 1;
+
+void sigint_handler(int sig)
+{
+    (void)sig;
+    do_work_glob = 0;
+}
+
+void msleep(unsigned int msec)
+{
+    time_t sec = (int)(msec / 1000);
+    msec = msec - (sec * 1000);
+    struct timespec req = {0};
+    req.tv_sec = sec;
+    req.tv_nsec = msec * 1000000L;
+    if (TEMP_FAILURE_RETRY(nanosleep(&req, &req)))
+        ERR("nanosleep");
+}
 
 void set_nonblock(int fd)
 {
@@ -45,8 +76,18 @@ int reset(int* a, int n, int x)
     return -1;
 }
 
-void server_work(int listen_fd)
+void run_tcp(int listen_fd, thread_args_t* t_args)
 {
+    int* votes = t_args->votes;
+    pthread_mutex_t* mtx_votes = t_args->mtx_votes;
+    int* do_work = t_args->do_work;
+    pthread_mutex_t* mtx_do_work = t_args->mtx_do_work;
+
+    sigset_t mask, oldmask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigprocmask(SIG_BLOCK, &mask, &oldmask);
+
     int epoll_fd;
     if ((epoll_fd = epoll_create1(0)) < 0)
         ERR("epoll_create1");
@@ -57,15 +98,25 @@ void server_work(int listen_fd)
         ERR("epoll_ctl");
 
     int electors[MAX_EVENTS];
-    int votes[MAX_EVENTS];
     for (int i = 0; i < MAX_EVENTS; i++)
         electors[i] = -1;
 
-    while (do_work)
+    for (;;)
     {
-        int nfds = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+        if (do_work_glob == 0)
+        {
+            pthread_mutex_lock(mtx_do_work);
+            *do_work = 0;
+            pthread_mutex_unlock(mtx_do_work);
+            break;
+        }
+        int nfds = epoll_pwait(epoll_fd, events, MAX_EVENTS, -1, &oldmask);
         if (nfds < 0)
+        {
+            if (errno == EINTR)
+                continue;
             ERR("epoll_wait");
+        }
         for (int i = 0; i < nfds; i++)
         {
             int fd = events[i].data.fd;
@@ -81,10 +132,6 @@ void server_work(int listen_fd)
                     event.events = EPOLLIN;
                     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &event) < 0)
                         ERR("epoll_ctl");
-
-                    // printf("All votes thus far:\n");
-                    // for (int i = 0; i < MAX_EVENTS; i++)
-                    //     printf("Elector of %d voted for %d\n", i + 1, votes[i]);
                 }
                 else
                 {
@@ -113,7 +160,7 @@ void server_work(int listen_fd)
                                 else
                                 {
                                     electors[k - 1] = fd;
-                                    sprintf(msg, "Welcome, elector of %d!\n", k);
+                                    sprintf(msg, "\nWelcome, elector of %d!\n", k);
                                     if (bulk_write(fd, msg, strlen(msg)) < 0)
                                         ERR("bulk_write");
                                 }
@@ -125,7 +172,9 @@ void server_work(int listen_fd)
                             if (buf >= '1' && buf <= '3')
                             {
                                 int vote = (int)(buf - '0');
+                                pthread_mutex_lock(mtx_votes);
                                 votes[who] = vote;
+                                pthread_mutex_unlock(mtx_votes);
                             }
                         }
                     }
@@ -142,18 +191,107 @@ void server_work(int listen_fd)
             }
         }
     }
+    int score[N_CANDIDATES];
+    memset(score, 0, sizeof(score));
+    for (int i = 0; i < MAX_EVENTS; i++)
+    {
+        if (votes[i] > 0)
+            score[votes[i] - 1]++;
+    }
+    for (int i = 0; i < N_CANDIDATES; i++)
+        printf("Candidate %d received %d votes\n", i + 1, score[i]);
+    if (close(epoll_fd) < 0)
+        ERR("close");
+    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+}
+
+void* run_udp(void* args)
+{
+    thread_args_t* t_args = args;
+    int* votes = t_args->votes;
+    pthread_mutex_t* mtx_votes = t_args->mtx_votes;
+    char* udp_port = t_args->udp_port;
+    int* do_work = t_args->do_work;
+    pthread_mutex_t* mtx_do_work = t_args->mtx_do_work;
+
+    int write_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (write_fd < 0)
+        ERR("socket");
+    struct sockaddr_in addr = make_address("127.0.0.1", udp_port);
+    int score[N_CANDIDATES];
+    for (;;)
+    {
+        pthread_mutex_lock(mtx_do_work);
+        if (*do_work == 0)
+        {
+            pthread_mutex_unlock(mtx_do_work);
+            if (close(write_fd) < 0)
+                ERR("close");
+            return NULL;
+        }
+        pthread_mutex_unlock(mtx_do_work);
+        msleep(1000);
+        memset(score, 0, sizeof(score));
+        pthread_mutex_lock(mtx_votes);
+        for (int i = 0; i < MAX_EVENTS; i++)
+        {
+            if (votes[i] > 0)
+                score[votes[i] - 1]++;
+        }
+        pthread_mutex_unlock(mtx_votes);
+        int winner = -1, max_score = 0;
+        for (int i = 0; i < N_CANDIDATES; i++)
+        {
+            if (score[i] > max_score)
+            {
+                max_score = score[i];
+                winner = i + 1;
+            }
+        }
+        char buf[BUF_SIZE];
+        if (winner > 0)
+            sprintf(buf, "The winner is %d\n", winner);
+        else
+            sprintf(buf, "No winner for now\n");
+        if (sendto(write_fd, buf, sizeof(buf), 0, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+            ERR("sendto");
+    }
+
+    if (close(write_fd) < 0)
+        ERR("close");
+    return NULL;
 }
 
 int main(int argc, char** argv)
 {
-    if (argc < 2)
-        ERR("usage: [port]");
-    int port = atoi(argv[1]);
-    int listen_fd = bind_tcp_socket(port, SOMAXCONN);
+    if (argc < 3)
+        ERR("usage: [tcp port] [udp port]");
+    int tcp_port = atoi(argv[1]);
+    char* udp_port = argv[2];
+    if (sethandler(sigint_handler, SIGINT))
+        ERR("sethandler");
+
+    thread_args_t* thread_args = malloc(sizeof(thread_args_t));
+    if (thread_args == NULL)
+        ERR("malloc");
+    memset(thread_args->votes, 0, MAX_EVENTS * sizeof(int));
+    pthread_mutex_t mtx_votes = PTHREAD_MUTEX_INITIALIZER;
+    thread_args->mtx_votes = &mtx_votes;
+    int do_work = 1;
+    thread_args->do_work = &do_work;
+    pthread_mutex_t mtx_do_work = PTHREAD_MUTEX_INITIALIZER;
+    thread_args->mtx_do_work = &mtx_do_work;
+    thread_args->udp_port = udp_port;
+    if (pthread_create(&(thread_args->tid), NULL, run_udp, thread_args) != 0)
+        ERR("pthread_create");
+
+    int listen_fd = bind_socket(tcp_port, SOCK_STREAM, SOMAXCONN);
     if (listen_fd < 0)
-        ERR("bind_tcp_socket");
+        ERR("bind_socket");
     set_nonblock(listen_fd);
-    server_work(listen_fd);
+    run_tcp(listen_fd, thread_args);
+    pthread_mutex_destroy(&mtx_votes);
+    pthread_mutex_destroy(&mtx_do_work);
     if (close(listen_fd) != 0)
         ERR("close");
     printf("server terminated\n");
