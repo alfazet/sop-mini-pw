@@ -13,7 +13,7 @@ typedef struct thread_args_t
 {
     pthread_t tid;
     pthread_mutex_t* mtx_votes;
-    int votes[MAX_EVENTS];
+    int* votes;
     char* udp_port;
     pthread_mutex_t* mtx_do_work;
     int* do_work;
@@ -274,6 +274,9 @@ int main(int argc, char** argv)
     thread_args_t* thread_args = malloc(sizeof(thread_args_t));
     if (thread_args == NULL)
         ERR("malloc");
+    thread_args->votes = malloc(MAX_EVENTS * sizeof(int));
+    if (thread_args->votes == NULL)
+        ERR("malloc");
     memset(thread_args->votes, 0, MAX_EVENTS * sizeof(int));
     pthread_mutex_t mtx_votes = PTHREAD_MUTEX_INITIALIZER;
     thread_args->mtx_votes = &mtx_votes;
@@ -294,6 +297,8 @@ int main(int argc, char** argv)
     pthread_mutex_destroy(&mtx_do_work);
     if (close(listen_fd) != 0)
         ERR("close");
+    free(thread_args->votes);
+    free(thread_args);
     printf("server terminated\n");
 
     return EXIT_SUCCESS;
